@@ -1,0 +1,269 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ranked Choice Voting</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .candidate-item {
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        .candidate-item:hover {
+            background-color: #f3f4f6;
+        }
+        #voting-section {
+            margin-bottom: 200vh; /* Two pages worth of white space */
+        }
+    </style>
+</head>
+<body class="bg-gray-100 font-sans">
+    <div class="container mx-auto p-6 max-w-3xl">
+        <h1 class="text-3xl font-bold mb-6 text-center">Ranked Choice Voting</h1>
+
+        <div id="define-candidates" class="bg-white p-6 rounded-lg shadow-md mb-6 hidden">
+            <h2 class="text-xl font-semibold mb-4">Define Candidates</h2>
+            <p class="text-gray-600 mb-4">Enter up to 4 candidates. Each must have a unique name.</p>
+            <div class="space-y-2">
+                <input id="candidate1" type="text" placeholder="Candidate 1" class="w-full p-2 border rounded">
+                <input id="candidate2" type="text" placeholder="Candidate 2" class="w-full p-2 border rounded">
+                <input id="candidate3" type="text" placeholder="Candidate 3" class="w-full p-2 border rounded">
+                <input id="candidate4" type="text" placeholder="Candidate 4" class="w-full p-2 border rounded">
+            </div>
+            <button id="start-voting" class="mt-4 bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600">Start Voting</button>
+        </div>
+
+        <div id="voting-section" class="bg-white p-6 rounded-lg shadow-md mb-6">
+            <h2 class="text-xl font-semibold mb-4">Rank Your Candidates</h2>
+            <button id="define-candidates-btn" class="mb-4 bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">Define Candidates</button>
+            <p class="text-gray-600 mb-4">Click candidates in order of preference (first click = 1st choice). The last candidate will be automatically ranked.</p>
+            <div id="candidate-list" class="space-y-2">
+                <!-- Candidates will be populated here -->
+            </div>
+            <div id="current-ranking" class="mt-4">
+                <h3 class="font-semibold">Your Current Ranking:</h3>
+                <ol id="ranking-list" class="list-decimal pl-6"></ol>
+            </div>
+            <button id="submit-vote" class="mt-4 bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 disabled:bg-gray-400" disabled>Submit Vote</button>
+            <button id="reset-ranking" class="mt-4 ml-2 bg-gray-500 text-white px-4 py-2 rounded hover:bg-gray-600">Reset</button>
+        </div>
+
+        <div class="bg-white p-6 rounded-lg shadow-md">
+            <h2 class="text-xl font-semibold mb-4">Election Results</h2>
+            <button id="show-results" class="mb-4 bg-purple-500 text-white px-4 py-2 rounded hover:bg-purple-600 hidden">Show Results</button>
+            <div id="results" class="text-gray-600">
+                <p>No votes submitted yet.</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let candidates = [];
+        let votes = [];
+        let currentRanking = [];
+
+        // Show define candidates section
+        document.getElementById('define-candidates-btn').addEventListener('click', () => {
+            document.getElementById('define-candidates').classList.remove('hidden');
+        });
+
+        // Start voting with defined candidates
+        document.getElementById('start-voting').addEventListener('click', () => {
+            const inputs = [
+                document.getElementById('candidate1').value.trim(),
+                document.getElementById('candidate2').value.trim(),
+                document.getElementById('candidate3').value.trim(),
+                document.getElementById('candidate4').value.trim()
+            ];
+            candidates = inputs.filter(name => name !== '').slice(0, 4);
+            if (new Set(candidates).size !== candidates.length) {
+                alert('All candidate names must be unique.');
+                return;
+            }
+            if (candidates.length < 2) {
+                alert('Please enter at least 2 candidates.');
+                return;
+            }
+            document.getElementById('define-candidates').classList.add('hidden');
+            document.getElementById('show-results').classList.add('hidden');
+            document.getElementById('results').innerHTML = '<p>No votes submitted yet.</p>';
+            votes = [];
+            currentRanking = [];
+            populateCandidates();
+            updateRankingDisplay();
+        });
+
+        // Populate candidate list
+        function populateCandidates() {
+            const list = document.getElementById('candidate-list');
+            list.innerHTML = '';
+            candidates.forEach(candidate => {
+                const div = document.createElement('div');
+                div.className = 'candidate-item flex items-center p-2 bg-gray-50 border rounded';
+                div.innerHTML = `<span>${candidate}</span>`;
+                div.addEventListener('click', () => handleCandidateClick(candidate, div));
+                list.appendChild(div);
+            });
+            updateSubmitButton();
+        }
+
+        // Handle candidate click
+        function handleCandidateClick(candidate, element) {
+            if (!currentRanking.includes(candidate)) {
+                currentRanking.push(candidate);
+                element.remove();
+                // Check if only one candidate remains
+                const remainingCandidates = candidates.filter(c => !currentRanking.includes(c));
+                if (remainingCandidates.length === 1) {
+                    currentRanking.push(remainingCandidates[0]);
+                    document.getElementById('candidate-list').innerHTML = '';
+                }
+                updateRankingDisplay();
+                updateSubmitButton();
+            }
+        }
+
+        // Update ranking display
+        function updateRankingDisplay() {
+            const rankingList = document.getElementById('ranking-list');
+            rankingList.innerHTML = '';
+            currentRanking.forEach((candidate, index) => {
+                const li = document.createElement('li');
+                li.textContent = `${candidate}`;
+                rankingList.appendChild(li);
+            });
+        }
+
+        // Enable/disable submit button
+        function updateSubmitButton() {
+            const submitButton = document.getElementById('submit-vote');
+            submitButton.disabled = currentRanking.length !== candidates.length;
+        }
+
+        // Reset ranking
+        document.getElementById('reset-ranking').addEventListener('click', () => {
+            currentRanking = [];
+            populateCandidates();
+            updateRankingDisplay();
+        });
+
+        // Submit vote
+        document.getElementById('submit-vote').addEventListener('click', () => {
+            if (currentRanking.length === candidates.length) {
+                votes.push([...currentRanking]);
+                currentRanking = [];
+                populateCandidates();
+                updateRankingDisplay();
+                document.getElementById('show-results').classList.remove('hidden');
+                document.getElementById('results').innerHTML = '<p>Press "Show Results" to view the election outcome.</p>';
+            }
+        });
+
+        // Show results
+        document.getElementById('show-results').addEventListener('click', calculateResults);
+
+        // Calculate results using Instant Runoff Voting
+        function calculateResults() {
+            const resultsDiv = document.getElementById('results');
+            if (votes.length === 0) {
+                resultsDiv.innerHTML = '<p>No votes submitted yet.</p>';
+                return;
+            }
+
+            let remainingCandidates = [...candidates];
+            let round = 1;
+            let resultText = '';
+
+            while (remainingCandidates.length > 1) {
+                resultText += `<h3 class="font-semibold mt-4">Round ${round}</h3>`;
+                const voteCounts = {};
+
+                // Count first-choice votes
+                votes.forEach(vote => {
+                    const firstChoice = vote.find(candidate => remainingCandidates.includes(candidate));
+                    if (firstChoice) {
+                        voteCounts[firstChoice] = (voteCounts[firstChoice] || 0) + 1;
+                    }
+                });
+
+                // Display vote counts
+                resultText += '<ul class="list-disc pl-5">';
+                remainingCandidates.forEach(candidate => {
+                    const count = voteCounts[candidate] || 0;
+                    resultText += `<li>${candidate}: ${count} votes</li>`;
+                });
+                resultText += '</ul>';
+
+                // Check for majority
+                const totalVotes = Object.values(voteCounts).reduce((sum, count) => sum + count, 0);
+                const maxVotes = Math.max(...Object.values(voteCounts));
+                const winner = Object.keys(voteCounts).find(candidate => voteCounts[candidate] === maxVotes);
+
+                if (maxVotes > totalVotes / 2) {
+                    resultText += `<p class="font-bold mt-2">${winner} wins with a majority!</p>`;
+                    break;
+                }
+
+                // Eliminate candidate with fewest votes
+                const minVotes = Math.min(...Object.values(voteCounts));
+                const toEliminate = Object.keys(voteCounts).filter(candidate => voteCounts[candidate] === minVotes);
+                resultText += `<p class="mt-2">Eliminating ${toEliminate.join(', ')} (fewest votes: ${minVotes})</p>`;
+                remainingCandidates = remainingCandidates.filter(candidate => !toEliminate.includes(candidate));
+
+                if (remainingCandidates.length === 0) {
+                    resultText += '<p class="font-bold mt-2">No winner (all candidates eliminated).</p>';
+                    break;
+                }
+
+                round++;
+            }
+
+            if (remainingCandidates.length === 1) {
+                resultText += `<p class="font-bold mt-2">${remainingCandidates[0]} wins!</p>`;
+            }
+
+            resultsDiv.innerHTML = resultText;
+        }
+    </script>
+</body>
+</html>
